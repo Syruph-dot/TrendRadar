@@ -1392,6 +1392,9 @@ def send_to_feishu_app_bot(
     ai_content = _render_ai_analysis(ai_analysis, "feishu") if ai_analysis else None
     ai_stats = _extract_ai_stats(ai_analysis)
 
+    if split_content_func is None:
+        raise ValueError("split_content_func is required")
+
     header_reserve = get_max_batch_header_size("feishu")
     batches = split_content_func(
         report_data,
