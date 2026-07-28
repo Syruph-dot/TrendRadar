@@ -27,6 +27,7 @@ from .senders import (
     send_to_dingtalk,
     send_to_email,
     send_to_feishu,
+    send_to_feishu_app_bot,
     send_to_ntfy,
     send_to_slack,
     send_to_telegram,
@@ -296,7 +297,13 @@ class NotificationDispatcher:
                 skip_rss=True, skip_standalone=True,
             )
 
-        # 飞书
+        # 飞书自建应用（优先级高于 Webhook 模式）
+        if self.config.get("FEISHU_APP_ID") and self.config.get("FEISHU_APP_SECRET") and self.config.get("FEISHU_APP_CHAT_IDS"):
+            results["feishu_app"] = self._send_feishu_app_bot(
+                report_data, report_type, update_info, proxy_url, mode, rss_items, rss_new_items,
+                ai_analysis, display_regions, standalone_data
+            )
+        # 飞书 Webhook
         if self.config.get("FEISHU_WEBHOOK_URL"):
             results["feishu"] = self._send_feishu(
                 report_data, report_type, update_info, proxy_url, mode, rss_items, rss_new_items,
@@ -457,6 +464,47 @@ class NotificationDispatcher:
                 display_regions=display_regions or {},
                 standalone_data=sd,
             ),
+        )
+
+    def _send_feishu_app_bot(
+        self,
+        report_data: Dict,
+        report_type: str,
+        update_info: Optional[Dict],
+        proxy_url: Optional[str],
+        mode: str,
+        rss_items: Optional[List[Dict]] = None,
+        rss_new_items: Optional[List[Dict]] = None,
+        ai_analysis: Optional[AIAnalysisResult] = None,
+        display_regions: Optional[Dict] = None,
+        standalone_data: Optional[Dict] = None,
+    ) -> bool:
+        """使用自建应用机器人发送到飞书（多群，支持热榜+RSS合并+AI分析）"""
+        rd, ri, rn, ai, sd = self._apply_display_regions(
+            report_data, display_regions, rss_items, rss_new_items, ai_analysis, standalone_data
+        )
+
+        chat_ids = parse_multi_account_config(self.config["FEISHU_APP_CHAT_IDS"])
+        chat_ids = limit_accounts(chat_ids, self.config["MAX_ACCOUNTS_PER_CHANNEL"])
+
+        return send_to_feishu_app_bot(
+            app_id=self.config["FEISHU_APP_ID"],
+            app_secret=self.config["FEISHU_APP_SECRET"],
+            chat_ids=chat_ids,
+            report_data=rd,
+            report_type=report_type,
+            update_info=update_info,
+            proxy_url=proxy_url,
+            mode=mode,
+            batch_size=self.config.get("FEISHU_BATCH_SIZE", 29000),
+            batch_interval=self.config.get("BATCH_SEND_INTERVAL", 1.0),
+            split_content_func=self.split_content_func,
+            get_time_func=self.get_time_func,
+            rss_items=ri,
+            rss_new_items=rn,
+            ai_analysis=ai,
+            display_regions=display_regions or {},
+            standalone_data=sd,
         )
 
     def _send_dingtalk(

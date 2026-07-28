@@ -1325,3 +1325,143 @@ def send_to_generic_webhook(
     print(f"{log_prefix}所有 {len(batches)} 批次发送完成 [{report_type}]")
 
     return True
+
+
+def send_to_feishu_app_bot(
+    app_id: str,
+    app_secret: str,
+    chat_ids: list,
+    report_data: Dict,
+    report_type: str,
+    update_info: Optional[Dict] = None,
+    proxy_url: Optional[str] = None,
+    mode: str = "daily",
+    account_label: str = "",
+    *,
+    batch_size: int = 29000,
+    batch_interval: float = 1.0,
+    split_content_func: Callable = None,
+    get_time_func: Callable = None,
+    rss_items: Optional[list] = None,
+    rss_new_items: Optional[list] = None,
+    ai_analysis: Any = None,
+    display_regions: Optional[Dict] = None,
+    standalone_data: Optional[Dict] = None,
+) -> bool:
+    """
+    使用自建应用机器人发送到飞书（支持多群、分批发送）
+
+    通过 tenant_access_token 鉴权，一个应用可发送到多个群，
+    通过 FEISHU_APP_CHAT_IDS 指定目标群（; 分隔）。
+
+    Args:
+        app_id: 飞书应用 App ID
+        app_secret: 飞书应用 App Secret
+        chat_ids: 目标群 chat_id 列表
+        其余参数同 send_to_feishu
+    """
+    proxies = None
+    if proxy_url:
+        proxies = {"http": proxy_url, "https": proxy_url}
+
+    log_prefix = f"飞书应用{account_label}" if account_label else "飞书应用"
+
+    # 获取 tenant_access_token
+    token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+    try:
+        token_resp = requests.post(
+            token_url,
+            json={"app_id": app_id, "app_secret": app_secret},
+            proxies=proxies,
+            timeout=15,
+        )
+        if token_resp.status_code != 200:
+            print(f"{log_prefix}获取 tenant_access_token 失败，状态码：{token_resp.status_code}")
+            return False
+        token_data = token_resp.json()
+        if "tenant_access_token" not in token_data:
+            print(f"{log_prefix}获取 tenant_access_token 失败：{token_data}")
+            return False
+        tenant_access_token = token_data["tenant_access_token"]
+        print(f"{log_prefix}已获取 tenant_access_token")
+    except Exception as e:
+        print(f"{log_prefix}获取 tenant_access_token 出错：{e}")
+        return False
+
+    # 渲染内容（复用 Webhook 版本的渲染逻辑）
+    ai_content = _render_ai_analysis(ai_analysis, "feishu") if ai_analysis else None
+    ai_stats = _extract_ai_stats(ai_analysis)
+
+    header_reserve = get_max_batch_header_size("feishu")
+    batches = split_content_func(
+        report_data,
+        "feishu",
+        update_info,
+        max_bytes=batch_size - header_reserve,
+        mode=mode,
+        rss_items=rss_items,
+        rss_new_items=rss_new_items,
+        ai_content=ai_content,
+        standalone_data=standalone_data,
+        ai_stats=ai_stats,
+        report_type=report_type,
+    )
+    batches = add_batch_headers(batches, "feishu", batch_size)
+
+    # 向每个群发送
+    msg_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    auth_headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {tenant_access_token}",
+    }
+
+    all_success = True
+    for chat_id in chat_ids:
+        chat_id = chat_id.strip()
+        if not chat_id:
+            continue
+
+        print(f"{log_prefix}群 {chat_id} 分为 {len(batches)} 批次 [{report_type}]")
+
+        for i, batch_content in enumerate(batches, 1):
+            card = {
+                "config": {"wide_screen_mode": True},
+                "body": {
+                    "elements": [{"tag": "markdown", "content": batch_content}]
+                },
+            }
+            payload = {
+                "receive_id": chat_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card),
+            }
+
+            try:
+                response = requests.post(
+                    msg_url, headers=auth_headers, json=payload,
+                    proxies=proxies, timeout=30,
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("code") == 0:
+                        print(f"{log_prefix}群 {chat_id} 第 {i}/{len(batches)} 批次发送成功 [{report_type}]")
+                        if i < len(batches):
+                            time.sleep(batch_interval)
+                    else:
+                        print(
+                            f"{log_prefix}群 {chat_id} 第 {i}/{len(batches)} 批次发送失败 "
+                            f"[{report_type}]，code={result.get('code')} msg={result.get('msg')}"
+                        )
+                        all_success = False
+                else:
+                    print(
+                        f"{log_prefix}群 {chat_id} 第 {i}/{len(batches)} 批次发送失败 "
+                        f"[{report_type}]，状态码：{response.status_code}"
+                    )
+                    all_success = False
+            except Exception as e:
+                print(f"{log_prefix}群 {chat_id} 第 {i}/{len(batches)} 批次发送出错 [{report_type}]：{e}")
+                all_success = False
+
+    print(f"{log_prefix}所有群推送完成 [{report_type}]")
+    return all_success
