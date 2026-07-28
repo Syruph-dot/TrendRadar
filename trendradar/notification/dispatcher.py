@@ -485,7 +485,7 @@ class NotificationDispatcher:
         )
 
         chat_ids = parse_multi_account_config(self.config["FEISHU_APP_CHAT_IDS"])
-        chat_ids = limit_accounts(chat_ids, self.config["MAX_ACCOUNTS_PER_CHANNEL"])
+        chat_ids = limit_accounts(chat_ids, self.config["MAX_ACCOUNTS_PER_CHANNEL"], "飞书自建应用")
 
         return send_to_feishu_app_bot(
             app_id=self.config["FEISHU_APP_ID"],

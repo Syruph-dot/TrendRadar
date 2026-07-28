@@ -1426,9 +1426,7 @@ def send_to_feishu_app_bot(
         for i, batch_content in enumerate(batches, 1):
             card = {
                 "config": {"wide_screen_mode": True},
-                "body": {
-                    "elements": [{"tag": "markdown", "content": batch_content}]
-                },
+                "elements": [{"tag": "markdown", "content": batch_content}],
             }
             payload = {
                 "receive_id": chat_id,
